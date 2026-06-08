@@ -113,3 +113,28 @@ export const wordsApi = {
         });
     },
 };
+
+/**
+ * Dictionary API calls (global master dictionary + validation)
+ */
+export const dictionaryApi = {
+    async validateWord(word) {
+        try {
+            const res = await fetch(`/api/dictionary/validate/${word.toUpperCase()}`, {
+                credentials: 'include',
+            });
+            if (!res.ok) return { valid: true, source: 'fallback' }; // fail open
+            return res.json();
+        } catch {
+            // Network error — fail open
+            return { valid: true, source: 'fallback' };
+        }
+    },
+
+    async fetchAll() {
+        const res = await fetch('/api/dictionary');
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.words;
+    },
+};

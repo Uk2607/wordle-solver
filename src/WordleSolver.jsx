@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNotification } from './hooks/useNotification.js';
 import { useAuth } from './hooks/useAuth.js';
-import { fetchWithRetry, creditsApi, wordsApi } from './utils/api.js';
+import { fetchWithRetry, creditsApi, wordsApi, dictionaryApi } from './utils/api.js';
 import { BASE_DICTIONARY, createEmptyRows } from './utils/constants.js';
 import { getFilteredWords, getScoredSuggestions, getKeyboardStates } from './utils/solver.js';
 
@@ -23,33 +23,42 @@ export default function App() {
     const [activeRowIndex, setActiveRowIndex] = useState(0);
     const [activeCellIndex, setActiveCellIndex] = useState(0);
     const [solverMode, setSolverMode] = useState("algo"); // "algo" | "ai"
-    
+
     // UI State
     const [newCustomWord, setNewCustomWord] = useState("");
     const [showHowToPlay, setShowHowToPlay] = useState(false);
     const [showCreditsModal, setShowCreditsModal] = useState(false);
     const [showProfileMenu, setShowProfileMenu] = useState(false);
-    
+
     // AI Solver State
     const [aiLoading, setAiLoading] = useState(false);
     const [aiResponse, setAiResponse] = useState(null);
     const [aiError, setAiError] = useState(null);
+    const [validating, setValidating] = useState(false);
 
     // Refs
     const gridContainerRef = useRef(null);
 
     // Custom Hooks
     const { notification, triggerNotification, clearNotification } = useNotification();
-    const { 
-        user, 
-        isLoggedIn, 
-        authLoading, 
-        googleBtnRef, 
-        customDictionary, 
+    const {
+        user,
+        isLoggedIn,
+        authLoading,
+        googleBtnRef,
+        customDictionary,
         setCustomDictionary,
-        handleSignOut,
-        updateUser 
+        handleSignOut: rawSignOut,
+        updateUser
     } = useAuth(triggerNotification);
+
+    // Wrap sign-out to also clear local UI state
+    const handleSignOut = async () => {
+        await rawSignOut();
+        setAiResponse(null);
+        setAiError(null);
+        setShowProfileMenu(false);
+    };
 
     const fullDictionary = [...BASE_DICTIONARY, ...customDictionary];
 
@@ -118,17 +127,34 @@ export default function App() {
         }));
     }, [activeRowIndex, activeCellIndex]);
 
-    const handleEnterRow = useCallback(() => {
-        if (rows[activeRowIndex].word.length === 5) {
-            if (activeRowIndex < 4) {
-                setActiveRowIndex(activeRowIndex + 1);
-                setActiveCellIndex(0);
-                triggerNotification(`Row ${activeRowIndex + 1} locked! Moving to Row ${activeRowIndex + 2}. Check recommendations!`, "success");
-            } else {
-                triggerNotification("All 5 Wordle rows have been configured!", "success");
+    const handleEnterRow = useCallback(async () => {
+        const currentWord = rows[activeRowIndex].word;
+        if (currentWord.length !== 5) {
+            return triggerNotification("Please fill in all 5 letters of the current row first.", "warning");
+        }
+
+        // Validate the word before locking the row
+        setValidating(true);
+        try {
+            const result = await dictionaryApi.validateWord(currentWord);
+            if (!result.valid) {
+                setValidating(false);
+                return triggerNotification(
+                    `"${currentWord}" is not a recognized English word. Please enter a valid 5-letter word.`,
+                    "error"
+                );
             }
+        } catch {
+            // Validation service unavailable — fail open, let the word through
+        }
+        setValidating(false);
+
+        if (activeRowIndex < 4) {
+            setActiveRowIndex(activeRowIndex + 1);
+            setActiveCellIndex(0);
+            triggerNotification(`Row ${activeRowIndex + 1} locked! Moving to Row ${activeRowIndex + 2}. Check recommendations!`, "success");
         } else {
-            triggerNotification("Please fill in all 5 letters of the current row first.", "warning");
+            triggerNotification("All 5 Wordle rows have been configured!", "success");
         }
     }, [activeRowIndex, rows, triggerNotification]);
 
@@ -166,6 +192,22 @@ export default function App() {
         if (cleaned.length !== 5) return triggerNotification("Word must be exactly 5 letters long.", "warning");
         if (!/^[A-Z]+$/.test(cleaned)) return triggerNotification("Word must only contain alphabetical characters.", "warning");
         if (fullDictionary.includes(cleaned)) return triggerNotification("This word already exists in the dictionary.", "warning");
+
+        // Validate the word is a real English word before adding
+        setValidating(true);
+        try {
+            const result = await dictionaryApi.validateWord(cleaned);
+            if (!result.valid) {
+                setValidating(false);
+                return triggerNotification(
+                    `"${cleaned}" is not a recognized English word. Cannot add to dictionary.`,
+                    "error"
+                );
+            }
+        } catch {
+            // Fail open
+        }
+        setValidating(false);
 
         if (user) {
             try {
@@ -340,30 +382,32 @@ Provide highly strategic suggestions to crack the word quickly. Verify constrain
                 </section>
 
                 <section className="lg:col-span-7 flex flex-col gap-6">
-                    <SolverHeader 
+                    <SolverHeader
                         solverMode={solverMode}
                         filteredWordsCount={filteredWords.length}
                         aiLoading={aiLoading}
                         onGetAISuggestions={getAISuggestions}
                     />
 
-                    {solverMode === "algo" ? (
-                        <AlgorithmicPanel 
-                            filteredWords={filteredWords}
-                            suggestions={suggestions}
-                            onApplyWord={handleApplyWord}
-                        />
-                    ) : (
-                        <AIPanel
-                            user={user}
-                            isLoggedIn={isLoggedIn}
-                            aiLoading={aiLoading}
-                            aiResponse={aiResponse}
-                            aiError={aiError}
-                            onGetAISuggestions={getAISuggestions}
-                            onApplyWord={handleApplyWord}
-                        />
-                    )}
+                    <div className="bg-slate-900/40 border border-slate-800/60 p-6 rounded-2xl flex-1 flex flex-col gap-5">
+                        {solverMode === "algo" ? (
+                            <AlgorithmicPanel
+                                filteredWords={filteredWords}
+                                suggestions={suggestions}
+                                onApplyWord={handleApplyWord}
+                            />
+                        ) : (
+                            <AIPanel
+                                user={user}
+                                isLoggedIn={isLoggedIn}
+                                aiLoading={aiLoading}
+                                aiResponse={aiResponse}
+                                aiError={aiError}
+                                onGetAISuggestions={getAISuggestions}
+                                onApplyWord={handleApplyWord}
+                            />
+                        )}
+                    </div>
 
                     <DictionarySection
                         customDictionary={customDictionary}
@@ -377,14 +421,14 @@ Provide highly strategic suggestions to crack the word quickly. Verify constrain
             </main>
 
             {showCreditsModal && (
-                <CreditsModal 
+                <CreditsModal
                     onClose={() => setShowCreditsModal(false)}
                     onPurchase={handlePurchaseCredits}
                 />
             )}
 
             {showHowToPlay && (
-                <HowToPlayModal 
+                <HowToPlayModal
                     onClose={() => setShowHowToPlay(false)}
                 />
             )}

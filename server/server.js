@@ -10,9 +10,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 import { initializeDatabase } from './db.js';
+import { loadBaseWords } from './wordLoader.js';
 import authRoutes from './routes/auth.js';
 import creditsRoutes from './routes/credits.js';
 import wordsRoutes from './routes/words.js';
+import dictionaryRoutes from './routes/dictionary.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -29,6 +31,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/credits', creditsRoutes);
 app.use('/api/words', wordsRoutes);
+app.use('/api/dictionary', dictionaryRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -41,6 +44,9 @@ async function start() {
     // Initialize database schema
     await initializeDatabase();
     console.log('[Server] Database schema ready');
+
+    // Load base dictionary from txt file into memory
+    loadBaseWords();
 
     app.listen(PORT, () => {
       console.log(`[Server] Wordle Solver API running on http://localhost:${PORT}`);
